@@ -1,0 +1,72 @@
+name: Process Short
+
+# Only manual trigger (phone: GitHub app -> Actions -> Run workflow).
+# No pull_request_target / issue_comment triggers on purpose (secret safety).
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_model:
+        description: "faster-whisper model (small is fast, medium is more accurate)"
+        default: "small"
+        type: choice
+        options: [small, medium]
+      language:
+        description: "Spoken language code (hi covers Hindi/Hinglish)"
+        default: "hi"
+      hook:
+        description: "Hook text shown in first 2 seconds (optional)"
+        default: ""
+      cta:
+        description: "CTA text at the end (optional)"
+        default: "Follow AI BABA"
+
+permissions:
+  contents: read
+
+jobs:
+  process:
+    if: github.repository_owner == 'gauravg2a' && github.actor == 'gauravg2a'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg fonts-noto-core rclone
+          fc-cache -f
+
+      - name: Install python deps
+        run: pip install -r requirements.txt
+
+      - name: Configure rclone (secret)
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Pull raw videos from Drive inbox
+        run: |
+          mkdir -p work/in work/out
+          rclone copy gdrive:AIBABA/inbox work/in --include "*.{mp4,mov,MP4,MOV}" --max-age 7d
+          ls -la work/in
+
+      - name: Run pipeline
+        env:
+          WHISPER_MODEL: ${{ inputs.whisper_model }}
+          LANGUAGE: ${{ inputs.language }}
+          HOOK_TEXT: ${{ inputs.hook }}
+          CTA_TEXT: ${{ inputs.cta }}
+        run: python scripts/pipeline.py work/in work/out
+
+      - name: Upload results to Drive outputs
+        run: |
+          rclone copy work/out gdrive:AIBABA/outputs
+          rclone move work/in gdrive:AIBABA/processed --include "*.{mp4,mov,MP4,MOV}"
